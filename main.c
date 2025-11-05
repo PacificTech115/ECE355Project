@@ -25,6 +25,15 @@
 unsigned int Freq = 0;  // measured frequency value (global variable)
 unsigned int Res = 0;   // measured resistance value (global variable)
 
+#define POTENTIOMETER_ADC_CHANNEL   (ADC_CHSELR_CHSEL1)
+#define POTENTIOMETER_GPIO_ANALOG   (GPIO_MODER_MODER1)
+#define POTENTIOMETER_GPIO_NOPULL   (GPIO_PUPDR_PUPDR1)
+
+#define FUNCTION_GENERATOR_EXTI_MASK (EXTI_IMR_MR2)
+#define FUNCTION_GENERATOR_EXTI_FLAG (EXTI_PR_PR2)
+#define TIMER_555_EXTI_MASK          (EXTI_IMR_MR3)
+#define TIMER_555_EXTI_FLAG          (EXTI_PR_PR3)
+
 // init functions
 void myGPIOA_Init(void);
 void myGPIOB_Init(void);
@@ -279,9 +288,9 @@ void myGPIOA_Init()
         GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR0);
 
         /* Configure PA1 as analog input for the potentiometer */
-        GPIOA->MODER &= ~(GPIO_MODER_MODER1);
-        GPIOA->MODER |= GPIO_MODER_MODER1;
-        GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR1);
+        GPIOA->MODER &= ~(POTENTIOMETER_GPIO_ANALOG);
+        GPIOA->MODER |= POTENTIOMETER_GPIO_ANALOG;
+        GPIOA->PUPDR &= ~(POTENTIOMETER_GPIO_NOPULL);
 
         /* Configure PA4 as analog output for the DAC */
         GPIOA->MODER &= ~(GPIO_MODER_MODER4);
@@ -327,6 +336,9 @@ void myTIM2_Init()
 
 void myEXTI_Init()
 {
+        /* Enable SYSCFG clock before configuring EXTI routing */
+        RCC->APB2ENR |= RCC_APB2ENR_SYSCFGCOMPEN;
+
         /* Map EXTI lines to the proper ports */
         SYSCFG->EXTICR[0] &= ~(SYSCFG_EXTICR1_EXTI0 | SYSCFG_EXTICR1_EXTI2 | SYSCFG_EXTICR1_EXTI3);
         SYSCFG->EXTICR[0] |= (SYSCFG_EXTICR1_EXTI2_PB | SYSCFG_EXTICR1_EXTI3_PB);
@@ -335,11 +347,11 @@ void myEXTI_Init()
         EXTI->RTSR |= (EXTI_RTSR_TR0 | EXTI_RTSR_TR2 | EXTI_RTSR_TR3);
 
         /* Unmask EXTI lines: start with button and 555 timer enabled */
-        EXTI->IMR |= (EXTI_IMR_MR0 | EXTI_IMR_MR3);
-        EXTI->IMR &= ~(EXTI_IMR_MR2);
+        EXTI->IMR |= (EXTI_IMR_MR0 | TIMER_555_EXTI_MASK);
+        EXTI->IMR &= ~(FUNCTION_GENERATOR_EXTI_MASK);
 
         /* Clear any pending EXTI flags */
-        EXTI->PR |= (EXTI_PR_PR0 | EXTI_PR_PR2 | EXTI_PR_PR3);
+        EXTI->PR |= (EXTI_PR_PR0 | FUNCTION_GENERATOR_EXTI_FLAG | TIMER_555_EXTI_FLAG);
 
         /* Assign EXTI2_3 interrupt priority = 1 in NVIC */
         NVIC_SetPriority(EXTI2_3_IRQn,1);
@@ -386,12 +398,12 @@ void EXTI0_1_IRQHandler()
 
                 if(inSig == 0){
                         inSig = 1;
-                        EXTI->IMR &= ~(EXTI_IMR_MR3);
-                        EXTI->IMR |= EXTI_IMR_MR2;
+                        EXTI->IMR &= ~(TIMER_555_EXTI_MASK);
+                        EXTI->IMR |= FUNCTION_GENERATOR_EXTI_MASK;
                 }else{
                         inSig = 0;
-                        EXTI->IMR &= ~(EXTI_IMR_MR2);
-                        EXTI->IMR |= EXTI_IMR_MR3;
+                        EXTI->IMR &= ~(FUNCTION_GENERATOR_EXTI_MASK);
+                        EXTI->IMR |= TIMER_555_EXTI_MASK;
                 }
 
                 EXTI->PR |= EXTI_PR_PR0;
@@ -403,7 +415,7 @@ void EXTI2_3_IRQHandler()
         double freq;
         uint32_t count;
 
-        if ((EXTI->PR & EXTI_PR_PR3) != 0){
+        if ((EXTI->PR & TIMER_555_EXTI_FLAG) != 0){
                 if(timerTriggered == 0){
                         timerTriggered = 1;
                         TIM2->CNT = 0;
@@ -421,10 +433,10 @@ void EXTI2_3_IRQHandler()
                         Freq = (unsigned int)freq;
                         Res = (unsigned int)Potentiometer_resistance();
                 }
-                EXTI->PR |= EXTI_PR_PR3;
+                EXTI->PR |= TIMER_555_EXTI_FLAG;
         }
 
-        if ((EXTI->PR & EXTI_PR_PR2) != 0){
+        if ((EXTI->PR & FUNCTION_GENERATOR_EXTI_FLAG) != 0){
                 if(timerTriggered == 0){
                         timerTriggered = 1;
                         TIM2->CNT = 0;
@@ -442,7 +454,7 @@ void EXTI2_3_IRQHandler()
                         Freq = (unsigned int)freq;
                         Res = (unsigned int)Potentiometer_resistance();
                 }
-                EXTI->PR |= EXTI_PR_PR2;
+                EXTI->PR |= FUNCTION_GENERATOR_EXTI_FLAG;
         }
 }
 
@@ -465,7 +477,7 @@ void myADC_Init(void){
 	while(ADC1->CR & ADC_CR_ADCAL); // timeout until calibration complete
 
 
-        ADC1->CHSELR = ADC_CHSELR_CHSEL1; // select channel 1 (PA1) for ADC input
+        ADC1->CHSELR = POTENTIOMETER_ADC_CHANNEL; // select channel 1 (PA1) for ADC input
 
 	ADC1->SMPR |= 7; // max smp = 0b111 = 7 (239.5 ADC clock cycles)
 
@@ -535,7 +547,7 @@ void myGPIOB_Init()
 	//	10: Alternate function mode
 	//	11: Analog mode
 
-        /* Configure PB2 and PB3 as inputs for the function generator and 555 timer */
+        /* Configure PB2 (function generator) and PB3 (555 timer) as digital inputs */
         GPIOB->MODER &= ~(GPIO_MODER_MODER2 | GPIO_MODER_MODER3);
 
         /* Configure PB8, PB9, and PB11 as digital outputs for the OLED control signals */
