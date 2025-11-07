@@ -25,11 +25,21 @@
 unsigned int Freq = 0;  // measured frequency value (global variable)
 unsigned int Res = 0;   // measured resistance value (global variable)
 
+#define POTENTIOMETER_ADC_CHANNEL   (ADC_CHSELR_CHSEL1)
+#define POTENTIOMETER_GPIO_ANALOG   (GPIO_MODER_MODER1)
+#define POTENTIOMETER_GPIO_NOPULL   (GPIO_PUPDR_PUPDR1)
+
+#define FUNCTION_GENERATOR_EXTI_MASK (EXTI_IMR_MR2)
+#define FUNCTION_GENERATOR_EXTI_FLAG (EXTI_PR_PR2)
+#define TIMER_555_EXTI_MASK          (EXTI_IMR_MR3)
+#define TIMER_555_EXTI_FLAG          (EXTI_PR_PR3)
+
 // init functions
 void myGPIOA_Init(void);
+void myGPIOB_Init(void);
+void myGPIOC_Init(void);
 void myTIM2_Init(void);
 void myEXTI_Init(void);
-void myGPIOB_Init(void);
 
 void myADC_Init(void);
 void myDAC_Init(void);
@@ -245,8 +255,9 @@ int main(int argc, char* argv[])
 	trace_printf("This is the Project\n");
 	trace_printf("System clock: %u Hz\n", SystemCoreClock);
 
-	myGPIOA_Init();	// initialize I/O port PA
- 	myGPIOB_Init(); // initalize PB
+        myGPIOA_Init(); // initialize I/O port PA
+        myGPIOB_Init(); // initialize PB
+        myGPIOC_Init(); // initialize PC
 	myDAC_Init(); // initialize DAC
 	myTIM2_Init(); //Initialize timer TIM2
 	myADC_Init(); // initialize ADC
@@ -272,29 +283,19 @@ void myGPIOA_Init()
 	// Relevant register: RCC->AHBENR
 	RCC->AHBENR |= RCC_AHBENR_GPIOAEN;
 
-	/* Configure PA1 as input */
-	// Relevant register: GPIOA->MODER
-	GPIOA->MODER &= ~(GPIO_MODER_MODER1);
-	/* Ensure no pull-up/pull-down for PA1 */
-	// Relevant register: GPIOA->PUPDR
-	GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR1);
+        /* Configure PA0 as input for the user push button */
+        GPIOA->MODER &= ~(GPIO_MODER_MODER0);
+        GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR0);
 
-	/* Configure PA2 as input */
-	// Relevant register: GPIOA->MODER
-	GPIOA->MODER &= ~(GPIO_MODER_MODER2);
-	/* Ensure no pull-up/pull-down for PA2 */
-	// Relevant register: GPIOA->PUPDR
-	GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR2);
+        /* Configure PA1 as analog input for the potentiometer */
+        GPIOA->MODER &= ~(POTENTIOMETER_GPIO_ANALOG);
+        GPIOA->MODER |= POTENTIOMETER_GPIO_ANALOG;
+        GPIOA->PUPDR &= ~(POTENTIOMETER_GPIO_NOPULL);
 
-	/* Configure PA4 as analog output */
-	GPIOA->MODER |= 0b001100000000; // 0011 0000 0000 change bit 8 and 9
-	/* Ensure no pull-up/pull-down for PA4 */
-	GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR4);
-
-	/* Configure PA5 as analog input */
-	GPIOA->MODER |= 0b110000000000; // 1100 0000 0000 change bit 10 and 11
-	/* Ensure no pull-up/pull-down for PA5 */
-	GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR5);
+        /* Configure PA4 as analog output for the DAC */
+        GPIOA->MODER &= ~(GPIO_MODER_MODER4);
+        GPIOA->MODER |= GPIO_MODER_MODER4;
+        GPIOA->PUPDR &= ~(GPIO_PUPDR_PUPDR4);
 }
 
 void myTIM2_Init()
@@ -335,33 +336,34 @@ void myTIM2_Init()
 
 void myEXTI_Init()
 {
-	/* Map EXTI2 each EXTI */
-	SYSCFG->EXTICR[0] &= ~(SYSCFG_EXTICR1_EXTI2);
-	SYSCFG->EXTICR[0] &= ~(SYSCFG_EXTICR1_EXTI0);
-	SYSCFG->EXTICR[0] &= ~(SYSCFG_EXTICR1_EXTI1);
+        /* Enable SYSCFG clock before configuring EXTI routing */
+        RCC->APB2ENR |= RCC_APB2ENR_SYSCFGCOMPEN;
 
-	/* all EXTI line interrupts: set rising-edge trigger */
-	EXTI->RTSR |= (EXTI_RTSR_TR0);
-	EXTI->RTSR |= (EXTI_RTSR_TR1);
-	EXTI->RTSR |= (EXTI_RTSR_TR2);
+        /* Map EXTI lines to the proper ports */
+        SYSCFG->EXTICR[0] &= ~(SYSCFG_EXTICR1_EXTI0 | SYSCFG_EXTICR1_EXTI2 | SYSCFG_EXTICR1_EXTI3);
+        SYSCFG->EXTICR[0] |= (SYSCFG_EXTICR1_EXTI2_PB | SYSCFG_EXTICR1_EXTI3_PB);
 
-	/* Unmask interrupts from each EXTI line */
-	EXTI->IMR |= (EXTI_IMR_MR0);
-	EXTI->IMR |= (EXTI_IMR_MR1);
-	EXTI->IMR |= (EXTI_IMR_MR2);
+        /* Configure rising-edge trigger for the button and signal inputs */
+        EXTI->RTSR |= (EXTI_RTSR_TR0 | EXTI_RTSR_TR2 | EXTI_RTSR_TR3);
 
-	/* Assign EXTI2 interrupt priority = 1 in NVIC */
-	NVIC_SetPriority(EXTI2_3_IRQn,1);
+        /* Unmask EXTI lines: start with button and 555 timer enabled */
+        EXTI->IMR |= (EXTI_IMR_MR0 | TIMER_555_EXTI_MASK);
+        EXTI->IMR &= ~(FUNCTION_GENERATOR_EXTI_MASK);
 
-	/* Enable EXTI2 interrupts in NVIC */
-	// Relevant register: NVIC->ISER[0], or use NVIC_EnableIRQ
-	NVIC_EnableIRQ(EXTI2_3_IRQn);
+        /* Clear any pending EXTI flags */
+        EXTI->PR |= (EXTI_PR_PR0 | FUNCTION_GENERATOR_EXTI_FLAG | TIMER_555_EXTI_FLAG);
 
-	/* Assign EXTI1 interrupt priority = 0 in NVIC */
-	NVIC_SetPriority(EXTI0_1_IRQn,0);
+        /* Assign EXTI2_3 interrupt priority = 1 in NVIC */
+        NVIC_SetPriority(EXTI2_3_IRQn,1);
 
-	/* Enable EXTI1 interrupts in NVIC */
-	NVIC_EnableIRQ(EXTI0_1_IRQn);
+        /* Enable EXTI2_3 interrupts in NVIC */
+        NVIC_EnableIRQ(EXTI2_3_IRQn);
+
+        /* Assign EXTI0_1 interrupt priority = 0 in NVIC */
+        NVIC_SetPriority(EXTI0_1_IRQn,0);
+
+        /* Enable EXTI0_1 interrupts in NVIC */
+        NVIC_EnableIRQ(EXTI0_1_IRQn);
 }
 
 
@@ -385,134 +387,75 @@ void TIM2_IRQHandler()
 
 /* This handler is declared in system/src/cmsis/vectors_stm32f051x8.c */
 
-void EXTI0_1_IRQHandler(){
-	// Declare/initialize your local variables here...
-	double freq;
-	uint32_t count;
+void EXTI0_1_IRQHandler()
+{
+        if ((EXTI->PR & EXTI_PR_PR0) != 0) {
+                while((GPIOA->IDR & GPIO_IDR_0) != 0){}
 
-	/* Check if EXTI1 interrupt pending flag is indeed set */
-	if ((EXTI->PR & EXTI_PR_PR1) != 0) {
-		
-		//when EXTI1 when inSig = 0 */
+                TIM2->CR1 &= ~(TIM_CR1_CEN);
+                TIM2->CNT = 0;
+                timerTriggered = 0;
 
-		// If this is the first edge:
-		//	Clear count register (TIM2->CNT).
-		//	Start timer (TIM2->CR1).
-		//  Else (this is the second edge):
-		//	Stop timer (TIM2->CR1).
-		//	Read out count register (TIM2->CNT).
-		//	Calculate signal period and frequency.
-		//	Print calculated values to the console.
-		if((EXTI->PR & EXTI_PR_PR1) != 0){ // check interupt 1
-			if(timerTriggered == 0){ // first edge
-				timerTriggered = 1; // swap
-				count = 0; // clear count
+                if(inSig == 0){
+                        inSig = 1;
+                        EXTI->IMR &= ~(TIMER_555_EXTI_MASK);
+                        EXTI->IMR |= FUNCTION_GENERATOR_EXTI_MASK;
+                }else{
+                        inSig = 0;
+                        EXTI->IMR &= ~(FUNCTION_GENERATOR_EXTI_MASK);
+                        EXTI->IMR |= TIMER_555_EXTI_MASK;
+                }
 
-				TIM2->CNT = 0; // clear count register
-
-				TIM2->CR1 |= TIM_CR1_CEN;; // start timer
-			}else{ // second edge
-				timerTriggered = 0; // swap
-
-				TIM2->CR1 &= ~(TIM_CR1_CEN); // stop timer
-
-				count = TIM2->CNT; // update count
-
-				freq = ((double)SystemCoreClock)/((double)count); // record freq
-
-				trace_printf("Source: 555\n");
-				trace_printf("The Frequency is: %f Hz\n", freq);
-				trace_printf("The Resistance is: %f ohms\n\n", (float)Potentiometer_resistance());
-
-				Freq = (unsigned int)freq; //transmist to the global vresion for our display
-				Res = (unsigned int)Potentiometer_resistance(); // transmit to global version for our display
-			}
-		}
-		if((EXTI->PR & EXTI_PR_PR0) != 0){ // is button pressed?
-			while((GPIOA->IDR & GPIO_IDR_0) != 0){} // wait for button
-			EXTI->IMR &= ~(EXTI_IMR_MR1); // disable this interupt (1)
-			EXTI->IMR &= ~(EXTI_IMR_MR0); // clear and set intterupt 0
-			EXTI->IMR |= (EXTI_IMR_MR0);
-		}
-
-		// Clear EXTI1 interrupt pending flag (EXTI->PR).
-		EXTI->PR |= EXTI_PR_PR1;
-	}
-
-
-	if ((EXTI->PR & EXTI_PR_PR0) != 0) { // intterupt 0
-		/* 
-  		If inSig = 0, then: let inSig = 1, disable
-		EXTI1 interrupts, enable EXTI2 interrupts
-		Else: let inSig = 0, disable EXTI2 interrupts,
-		enable EXTI1 interrupts 
-  		*/
-
-		EXTI->PR |= 0x1; // clear interupt pending flag for exti 0
-
-
-
-//		inSig = 0 is 555
-//		inSig = 1 is fg
-		if(inSig == 0){
-			inSig = 1; // swap
-			EXTI->IMR &= ~(1 << 1);//disable exti1
-			EXTI->IMR |= (1 << 2); //enable exti2
-		}else{
-			inSig = 0; // swap
-			EXTI->IMR &= ~(1 << 2);//disable exti2
-			EXTI->IMR |= (1 << 1);//enable exti1
-		}
-	}
-
+                EXTI->PR |= EXTI_PR_PR0;
+        }
 }
 
 void EXTI2_3_IRQHandler()
 {
-	double freq;
-	uint32_t count;
-	/* Check if EXTI2 interrupt pending flag is indeed set */
-	// this reads off function generator
-	if ((EXTI->PR & EXTI_PR_PR2) != 0){
+        double freq;
+        uint32_t count;
 
-		// same method as above
-			if((EXTI->PR & EXTI_PR_PR2) != 0){
-				if(timerTriggered == 0){
-					timerTriggered = 1;
-					count = 0;
+        if ((EXTI->PR & TIMER_555_EXTI_FLAG) != 0){
+                if(timerTriggered == 0){
+                        timerTriggered = 1;
+                        TIM2->CNT = 0;
+                        TIM2->CR1 |= TIM_CR1_CEN;
+                }else{
+                        timerTriggered = 0;
+                        TIM2->CR1 &= ~(TIM_CR1_CEN);
+                        count = TIM2->CNT;
+                        freq = (count != 0) ? ((double)SystemCoreClock)/((double)count) : 0.0;
 
-					TIM2->CNT = 0;
+                        trace_printf("Source: 555\n");
+                        trace_printf("The Frequency is: %f Hz\n", freq);
+                        trace_printf("The Resistance is: %f ohms\n\n", (float)Potentiometer_resistance());
 
-					TIM2->CR1 |= TIM_CR1_CEN;;
-				}else{
-					timerTriggered = 0;
+                        Freq = (unsigned int)freq;
+                        Res = (unsigned int)Potentiometer_resistance();
+                }
+                EXTI->PR |= TIMER_555_EXTI_FLAG;
+        }
 
-					TIM2->CR1 &= ~(TIM_CR1_CEN);
+        if ((EXTI->PR & FUNCTION_GENERATOR_EXTI_FLAG) != 0){
+                if(timerTriggered == 0){
+                        timerTriggered = 1;
+                        TIM2->CNT = 0;
+                        TIM2->CR1 |= TIM_CR1_CEN;
+                }else{
+                        timerTriggered = 0;
+                        TIM2->CR1 &= ~(TIM_CR1_CEN);
+                        count = TIM2->CNT;
+                        freq = (count != 0) ? ((double)SystemCoreClock)/((double)count) : 0.0;
 
-					count = TIM2->CNT;
+                        trace_printf("Source: Function Generator\n");
+                        trace_printf("The Frequency is: %f Hz\n", freq);
+                        trace_printf("The Resistance is: %f ohms\n\n", (float)Potentiometer_resistance());
 
-					freq = ((double)SystemCoreClock)/((double)count); // freq=1/period
-
-					trace_printf("Source: Function Generator\n");
-					trace_printf("The Frequency is: %f Hz\n", freq);
-					trace_printf("The Resistance is: %f ohms\n\n", (float)Potentiometer_resistance());
-
-					Freq = (unsigned int)freq; //transmist to the global vresion for our display
-					Res = (unsigned int)Potentiometer_resistance(); // transmit to glboal version for our display
-				}
-			}
-
-		// button press in this inttereupt
-		if((EXTI->PR & EXTI_PR_PR0) != 0){ // is button pressed?
-			while((GPIOA->IDR & GPIO_IDR_0) != 0){} // wait for button
-			EXTI->IMR &= ~(EXTI_IMR_MR2); // disable this interupt
-			EXTI->IMR &= ~(EXTI_IMR_MR0); // clear adn set button
-			EXTI->IMR |= (EXTI_IMR_MR0);
-		}
-
-		EXTI->PR |= EXTI_PR_PR2;
-
-	}
+                        Freq = (unsigned int)freq;
+                        Res = (unsigned int)Potentiometer_resistance();
+                }
+                EXTI->PR |= FUNCTION_GENERATOR_EXTI_FLAG;
+        }
 }
 
 // initialize ADC
@@ -534,7 +477,7 @@ void myADC_Init(void){
 	while(ADC1->CR & ADC_CR_ADCAL); // timeout until calibration complete
 
 
-	ADC1->CHSELR = ADC_CHSELR_CHSEL5; // select CHSEL5 for ADC channel 5
+        ADC1->CHSELR = POTENTIOMETER_ADC_CHANNEL; // select channel 1 (PA1) for ADC input
 
 	ADC1->SMPR |= 7; // max smp = 0b111 = 7 (239.5 ADC clock cycles)
 
@@ -597,42 +540,45 @@ void read_DAC(){
 
 void myGPIOB_Init()
 {
-	RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
+        RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
 
 	//	00: Input mode (reset state)
 	//	01: General purpose output mode
 	//	10: Alternate function mode
 	//	11: Analog mode
 
-	/* Configure PB3 as alternate */
-	GPIOB->MODER &= ~(GPIO_MODER_MODER3_0); // clear low bit
-	GPIOB->MODER |= (GPIO_MODER_MODER3_1); // set high bit
-	// this works as we get 00(from clear) to 10(from set)
-	// apply to below
+        /* Configure PB2 (function generator) and PB3 (555 timer) as digital inputs */
+        GPIOB->MODER &= ~(GPIO_MODER_MODER2 | GPIO_MODER_MODER3);
 
-	/* Configure PB4 as ouput */
-	GPIOB->MODER &= ~(GPIO_MODER_MODER4_1); // clear high bit
-	GPIOB->MODER |= (GPIO_MODER_MODER4_0); // set low bit
-	//00 -> 01
+        /* Configure PB8, PB9, and PB11 as digital outputs for the OLED control signals */
+        GPIOB->MODER &= ~(GPIO_MODER_MODER8 | GPIO_MODER_MODER9 | GPIO_MODER_MODER11);
+        GPIOB->MODER |= (GPIO_MODER_MODER8_0 | GPIO_MODER_MODER9_0 | GPIO_MODER_MODER11_0);
 
-	/* Configure PB5 as alternate */
-	GPIOB->MODER &= ~(GPIO_MODER_MODER5_0);
-	GPIOB->MODER |= (GPIO_MODER_MODER5_1);
+        /* Configure PB13 and PB15 for SPI alternate function (AF0) */
+        GPIOB->MODER &= ~(GPIO_MODER_MODER13 | GPIO_MODER_MODER15);
+        GPIOB->MODER |= (GPIO_MODER_MODER13_1 | GPIO_MODER_MODER15_1);
 
-	/* Configure PB6 as ouput */
-	GPIOB->MODER &= ~(GPIO_MODER_MODER6_1);
-	GPIOB->MODER |= (GPIO_MODER_MODER6_0);
+        /* Ensure no pull-up/pull-down for the configured pins */
+        GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPDR2 | GPIO_PUPDR_PUPDR3 |
+                          GPIO_PUPDR_PUPDR8 | GPIO_PUPDR_PUPDR9 |
+                          GPIO_PUPDR_PUPDR11 | GPIO_PUPDR_PUPDR13 |
+                          GPIO_PUPDR_PUPDR15);
 
-	/* Configure PB7 as ouput */
-	GPIOB->MODER &= ~(GPIO_MODER_MODER7_1);
-	GPIOB->MODER |= (GPIO_MODER_MODER7_0);
+        /* Set default idle states for OLED control signals */
+        GPIOB->ODR |= (GPIO_ODR_8 | GPIO_ODR_9 | GPIO_ODR_11);
+}
 
-	/* Ensure no pull-up/pull-down for each */
-	GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPDR3);
-	GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPDR4);
-	GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPDR5);
-	GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPDR6);
-	GPIOB->PUPDR &= ~(GPIO_PUPDR_PUPDR7);
+void myGPIOC_Init()
+{
+        RCC->AHBENR |= RCC_AHBENR_GPIOCEN;
+
+        /* Configure PC8 and PC9 as outputs for the status LEDs */
+        GPIOC->MODER &= ~(GPIO_MODER_MODER8 | GPIO_MODER_MODER9);
+        GPIOC->MODER |= (GPIO_MODER_MODER8_0 | GPIO_MODER_MODER9_0);
+
+        /* Ensure LEDs default to off */
+        GPIOC->PUPDR &= ~(GPIO_PUPDR_PUPDR8 | GPIO_PUPDR_PUPDR9);
+        GPIOC->ODR &= ~(GPIO_ODR_8 | GPIO_ODR_9);
 }
 
 
@@ -689,31 +635,31 @@ void refresh_OLED( void )
 
 void oled_Write_Cmd( unsigned char cmd ) // this function is to send command byte to OLED, initializing display
 {
-    GPIOB->ODR |= GPIO_ODR_6; // make PB6 = CS# = 1
-    GPIOB->ODR &= ~(GPIO_ODR_7); // make PB7 = D/C# = 0
-    GPIOB->ODR &= ~(GPIO_ODR_6); // make PB6 = CS# = 0
+    GPIOB->ODR |= GPIO_ODR_8; // make PB8 = CS# = 1
+    GPIOB->ODR &= ~(GPIO_ODR_9); // make PB9 = D/C# = 0
+    GPIOB->ODR &= ~(GPIO_ODR_8); // make PB8 = CS# = 0
     oled_Write( cmd ); // write
-    GPIOB->ODR |= GPIO_ODR_6; // make PB6 = CS# = 1
+    GPIOB->ODR |= GPIO_ODR_8; // make PB8 = CS# = 1
 }
 
 void oled_Write_Data( unsigned char data ) // this function is to send data byte to OLED, data represents the actual pixel (draw characters)
 {
-	GPIOB->ODR |= GPIO_ODR_6; // make PB6 = CS# = 1
-	GPIOB->ODR |= GPIO_ODR_7; // make PB7 = D/C# = 1
-	GPIOB->ODR &= ~(GPIO_ODR_6); // make PB6 = CS# = 0
+	GPIOB->ODR |= GPIO_ODR_8; // make PB8 = CS# = 1
+	GPIOB->ODR |= GPIO_ODR_9; // make PB9 = D/C# = 1
+	GPIOB->ODR &= ~(GPIO_ODR_8); // make PB8 = CS# = 0
     oled_Write( data );
-    GPIOB->ODR |= GPIO_ODR_6; // make PB6 = CS# = 1
+    GPIOB->ODR |= GPIO_ODR_8; // make PB8 = CS# = 1
 }
 
 
 void oled_Write( unsigned char Value ) //send single byte over spi to oled
 {
 
-	while((SPI1->SR & SPI_SR_TXE) == 0);
+        while((SPI_Handle.Instance->SR & SPI_SR_TXE) == 0);
 
-  	HAL_SPI_Transmit( &SPI_Handle, &Value, 1, HAL_MAX_DELAY );
+        HAL_SPI_Transmit( &SPI_Handle, &Value, 1, HAL_MAX_DELAY );
 
-	while((SPI1->SR & SPI_SR_TXE) == 0); // same as above
+        while((SPI_Handle.Instance->SR & SPI_SR_TXE) == 0); // same as above
 }
 
 
@@ -721,15 +667,12 @@ void oled_config( void )
 {
 	RCC->AHBENR |= RCC_AHBENR_GPIOBEN;
 	
-	GPIOB->AFR[1] &= ~(0x0F << (3 * 4)); // clear AFR bit in PB3
-	GPIOB->AFR[1] &= ~(0x0F << (5 * 4)); // PB5
-	
-	GPIOB->AFR[1] |= (0x0 << (3 * 4)); // set AF0 to bit in PB3
-	GPIOB->AFR[1] |= (0x0 << (5 * 4)); // PB5
-	
-	RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
-	
-	SPI_Handle.Instance = SPI1;
+        GPIOB->AFR[1] &= ~(0x0F << ((13 - 8) * 4));
+        GPIOB->AFR[1] &= ~(0x0F << ((15 - 8) * 4));
+
+        RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
+
+        SPI_Handle.Instance = SPI2;
 	
 	SPI_Handle.Init.Direction = SPI_DIRECTION_1LINE;
 	SPI_Handle.Init.Mode = SPI_MODE_MASTER;
@@ -749,9 +692,9 @@ void oled_config( void )
 
 
     //Reset LED display
-    GPIOB->ODR &= ~(GPIO_ODR_4); // make pin PB4 = 0, wait for a few ms
+    GPIOB->ODR &= ~(GPIO_ODR_11); // make pin PB11 = 0, wait for a few ms
 	for(int i = 0; i < 1000; i++); //wait
-    GPIOB->ODR |= GPIO_ODR_4; // make pin PB4 = 1, wait for a few ms
+    GPIOB->ODR |= GPIO_ODR_11; // make pin PB11 = 1, wait for a few ms
 	for(int i = 0; i < 1000; i++); //wait
 
     // Send initialization commands to LED display
