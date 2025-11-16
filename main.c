@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdint.h>
 #include "diag/Trace.h"
 #include "stm32f051x8.h"
 #include "cmsis/cmsis_device.h"
