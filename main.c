@@ -536,16 +536,16 @@ void myDAC_Init(void){
 }
 
 uint32_t Potentiometer_resistance(){
-	uint32_t ADC_value = Potentiometer_voltage();
+        const uint32_t POTENTIOMETER_MAX_OHMS = 10000U;
+        const uint32_t ADC_FULL_SCALE = 4095U;
 
-	// Vchannel = ADC_data x (Vdda / Full_scale)
-	// ADC_data = ADC_value (read)
-	// Vdda = 3.3 V (given)
-	// Full_scale = 2^12 - 1 = 4095 with 12 bit resolution (maximum digital value of the ADC output)
+        uint32_t ADC_value = Potentiometer_voltage();
 
-	float v_channel = (ADC_value * 3.3f) / (4095.0f);// 4095 = 2^12 - 1
-	
-	return 5000.0f * (v_channel / (3.3f - v_channel)); // resistance in circuit is given as 5k ohms
+        if (ADC_value >= ADC_FULL_SCALE){
+                return POTENTIOMETER_MAX_OHMS;
+        }
+
+        return (ADC_value * POTENTIOMETER_MAX_OHMS) / ADC_FULL_SCALE;
 }
 
 uint32_t Potentiometer_voltage(){
