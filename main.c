@@ -58,8 +58,21 @@ void refresh_OLED(void);
 
 SPI_HandleTypeDef SPI_Handle;
 
-uint32_t timerTriggered = 0;
-uint32_t inSig = 0;
+typedef enum
+{
+SIGNAL_SOURCE_555 = 0,
+SIGNAL_SOURCE_FUNCTION_GENERATOR = 1
+} signal_source_t;
+
+static void handle_signal_capture(signal_source_t source);
+static void process_measurement(void);
+static const char *signal_name(signal_source_t source);
+
+volatile uint8_t timerTriggered = 0;
+volatile uint32_t inSig = 0;
+static volatile uint8_t measurementReady = 0;
+static volatile uint32_t capturedTimerTicks = 0;
+static volatile signal_source_t lastCapturedSource = SIGNAL_SOURCE_555;
 
 
 /*** Call this function to boost the STM32F0xx clock to 48 MHz ***/
@@ -256,9 +269,9 @@ int main(int argc, char* argv[])
 	trace_printf("This is the Project\n");
 	trace_printf("System clock: %u Hz\n", SystemCoreClock);
 
-        myGPIOA_Init(); // initialize I/O port PA
-        myGPIOB_Init(); // initialize PB
-        myGPIOC_Init(); // initialize PC
+myGPIOA_Init(); // initialize I/O port PA
+myGPIOB_Init(); // initialize PB
+myGPIOC_Init(); // initialize PC
 	myDAC_Init(); // initialize DAC
 	myTIM2_Init(); //Initialize timer TIM2
 	myADC_Init(); // initialize ADC
@@ -270,6 +283,7 @@ int main(int argc, char* argv[])
 	while (1)
 	{
 		read_DAC(); // read dac (cont. updates the dac value as well)
+		process_measurement();
 
 		refresh_OLED(); // refresh screen
 	}
@@ -390,73 +404,82 @@ void TIM2_IRQHandler()
 
 void EXTI0_1_IRQHandler()
 {
-        if ((EXTI->PR & EXTI_PR_PR0) != 0) {
-                while((GPIOA->IDR & GPIO_IDR_0) != 0){}
+	if ((EXTI->PR & EXTI_PR_PR0) != 0) {
+		while ((GPIOA->IDR & GPIO_IDR_0) != 0){}
 
-                TIM2->CR1 &= ~(TIM_CR1_CEN);
-                TIM2->CNT = 0;
-                timerTriggered = 0;
+		TIM2->CR1 &= ~(TIM_CR1_CEN);
+		TIM2->CNT = 0;
+		timerTriggered = 0;
 
-                if(inSig == 0){
-                        inSig = 1;
-                        EXTI->IMR &= ~(TIMER_555_EXTI_MASK);
-                        EXTI->IMR |= FUNCTION_GENERATOR_EXTI_MASK;
-                }else{
-                        inSig = 0;
-                        EXTI->IMR &= ~(FUNCTION_GENERATOR_EXTI_MASK);
-                        EXTI->IMR |= TIMER_555_EXTI_MASK;
-                }
+		if (inSig == 0) {
+			inSig = 1;
+			EXTI->IMR &= ~(TIMER_555_EXTI_MASK);
+			EXTI->IMR |= FUNCTION_GENERATOR_EXTI_MASK;
+		} else {
+			inSig = 0;
+			EXTI->IMR &= ~(FUNCTION_GENERATOR_EXTI_MASK);
+			EXTI->IMR |= TIMER_555_EXTI_MASK;
+		}
 
-                EXTI->PR |= EXTI_PR_PR0;
-        }
+		EXTI->PR |= EXTI_PR_PR0;
+	}
+}
+
+static void handle_signal_capture(signal_source_t source)
+{
+	if (timerTriggered == 0U) {
+		timerTriggered = 1U;
+		TIM2->CNT = 0U;
+		TIM2->CR1 |= TIM_CR1_CEN;
+	} else {
+		timerTriggered = 0U;
+		TIM2->CR1 &= ~(TIM_CR1_CEN);
+		capturedTimerTicks = TIM2->CNT;
+		lastCapturedSource = source;
+		measurementReady = 1U;
+	}
+}
+
+static const char *signal_name(signal_source_t source)
+{
+	return (source == SIGNAL_SOURCE_FUNCTION_GENERATOR) ? "Function Generator" : "555";
 }
 
 void EXTI2_3_IRQHandler()
 {
-        double freq;
-        uint32_t count;
+	if ((EXTI->PR & TIMER_555_EXTI_FLAG) != 0) {
+		handle_signal_capture(SIGNAL_SOURCE_555);
+		EXTI->PR |= TIMER_555_EXTI_FLAG;
+	}
 
-        if ((EXTI->PR & TIMER_555_EXTI_FLAG) != 0){
-                if(timerTriggered == 0){
-                        timerTriggered = 1;
-                        TIM2->CNT = 0;
-                        TIM2->CR1 |= TIM_CR1_CEN;
-                }else{
-                        timerTriggered = 0;
-                        TIM2->CR1 &= ~(TIM_CR1_CEN);
-                        count = TIM2->CNT;
-                        freq = (count != 0) ? ((double)SystemCoreClock)/((double)count) : 0.0;
+	if ((EXTI->PR & FUNCTION_GENERATOR_EXTI_FLAG) != 0) {
+		handle_signal_capture(SIGNAL_SOURCE_FUNCTION_GENERATOR);
+		EXTI->PR |= FUNCTION_GENERATOR_EXTI_FLAG;
+	}
+}
 
-                        trace_printf("Source: 555\n");
-                        trace_printf("The Frequency is: %f Hz\n", freq);
-                        trace_printf("The Resistance is: %f ohms\n\n", (float)Potentiometer_resistance());
+static void process_measurement(void)
+{
+	if (measurementReady == 0U) {
+		return;
+	}
 
-                        Freq = (unsigned int)freq;
-                        Res = (unsigned int)Potentiometer_resistance();
-                }
-                EXTI->PR |= TIMER_555_EXTI_FLAG;
-        }
+	uint32_t localTicks;
+	signal_source_t localSource;
 
-        if ((EXTI->PR & FUNCTION_GENERATOR_EXTI_FLAG) != 0){
-                if(timerTriggered == 0){
-                        timerTriggered = 1;
-                        TIM2->CNT = 0;
-                        TIM2->CR1 |= TIM_CR1_CEN;
-                }else{
-                        timerTriggered = 0;
-                        TIM2->CR1 &= ~(TIM_CR1_CEN);
-                        count = TIM2->CNT;
-                        freq = (count != 0) ? ((double)SystemCoreClock)/((double)count) : 0.0;
+	__disable_irq();
+	localTicks = capturedTimerTicks;
+	localSource = lastCapturedSource;
+	measurementReady = 0U;
+	__enable_irq();
 
-                        trace_printf("Source: Function Generator\n");
-                        trace_printf("The Frequency is: %f Hz\n", freq);
-                        trace_printf("The Resistance is: %f ohms\n\n", (float)Potentiometer_resistance());
+	double freq = (localTicks != 0U) ? ((double)SystemCoreClock) / ((double)localTicks) : 0.0;
+	Freq = (unsigned int)freq;
+	Res = (unsigned int)Potentiometer_resistance();
 
-                        Freq = (unsigned int)freq;
-                        Res = (unsigned int)Potentiometer_resistance();
-                }
-                EXTI->PR |= FUNCTION_GENERATOR_EXTI_FLAG;
-        }
+	trace_printf("Source: %s\n", signal_name(localSource));
+	trace_printf("The Frequency is: %u Hz\n", Freq);
+	trace_printf("The Resistance is: %u ohms\n\n", Res);
 }
 
 // initialize ADC
@@ -513,16 +536,16 @@ void myDAC_Init(void){
 }
 
 uint32_t Potentiometer_resistance(){
-	uint32_t ADC_value = Potentiometer_voltage();
+        const uint32_t POTENTIOMETER_MAX_OHMS = 10000U;
+        const uint32_t ADC_FULL_SCALE = 4095U;
 
-	// Vchannel = ADC_data x (Vdda / Full_scale)
-	// ADC_data = ADC_value (read)
-	// Vdda = 3.3 V (given)
-	// Full_scale = 2^12 - 1 = 4095 with 12 bit resolution (maximum digital value of the ADC output)
+        uint32_t ADC_value = Potentiometer_voltage();
 
-	float v_channel = (ADC_value * 3.3f) / (4095.0f);// 4095 = 2^12 - 1
-	
-	return 5000.0f * (v_channel / (3.3f - v_channel)); // resistance in circuit is given as 5k ohms
+        if (ADC_value >= ADC_FULL_SCALE){
+                return POTENTIOMETER_MAX_OHMS;
+        }
+
+        return (ADC_value * POTENTIOMETER_MAX_OHMS) / ADC_FULL_SCALE;
 }
 
 uint32_t Potentiometer_voltage(){
